@@ -698,6 +698,53 @@ const Header = memo(({
   );
 });
 
+const ProcessingOverlay = ({ progress, step }: { progress: number, step: string }) => (
+  <div className="fixed inset-0 z-[100] bg-white/40 backdrop-blur-md flex items-center justify-center p-6">
+    <div className="bg-white/90 border border-blue-100 rounded-[40px] p-10 max-w-sm w-full text-center shadow-2xl">
+      <div className="relative w-32 h-32 mx-auto mb-10">
+        <svg className="w-full h-full transform -rotate-90">
+          <circle
+            cx="64"
+            cy="64"
+            r="60"
+            stroke="currentColor"
+            strokeWidth="8"
+            fill="transparent"
+            className="text-blue-50"
+          />
+          <motion.circle
+            cx="64"
+            cy="64"
+            r="60"
+            stroke="currentColor"
+            strokeWidth="8"
+            fill="transparent"
+            strokeDasharray={377}
+            initial={{ strokeDashoffset: 377 }}
+            animate={{ strokeDashoffset: 377 - (377 * progress) / 100 }}
+            className="text-blue-600"
+            strokeLinecap="round"
+          />
+        </svg>
+        <div className="absolute inset-0 flex items-center justify-center">
+          <span className="text-3xl font-black text-blue-600">{Math.round(progress)}%</span>
+        </div>
+      </div>
+      
+      <h2 className="text-2xl font-black text-gray-800 mb-2 tracking-tight">Processing File</h2>
+      <p className="text-gray-400 text-sm mb-8 font-medium">{step}</p>
+      
+      <div className="w-full bg-blue-50 h-2 rounded-full overflow-hidden">
+        <motion.div 
+          className="h-full bg-blue-600"
+          initial={{ width: 0 }}
+          animate={{ width: `${progress}%` }}
+        />
+      </div>
+    </div>
+  </div>
+);
+
 function AppContent() {
   const [showSplash, setShowSplash] = useState(true);
   const [isLogin, setIsLogin] = useState(true);
@@ -720,6 +767,37 @@ function AppContent() {
   const [emailjsServiceId, setEmailjsServiceId] = useState('');
   const [emailjsTemplateId, setEmailjsTemplateId] = useState('');
   const [emailjsPublicKey, setEmailjsPublicKey] = useState('');
+  
+  // Custom Processing States
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [processingProgress, setProcessingProgress] = useState(0);
+  const [processingStep, setProcessingStep] = useState('');
+  const [isReady, setIsReady] = useState(false);
+  const [ntnMissingFilterTab, setNtnMissingFilterTab] = useState<'all' | 'highValue' | 'found'>('all');
+
+  const simulateProcessing = async (steps: string[]) => {
+    setIsProcessing(true);
+    setIsReady(false);
+    setProcessingProgress(0);
+    
+    for (let i = 0; i < steps.length; i++) {
+      setProcessingStep(steps[i]);
+      const startProgress = (i / steps.length) * 100;
+      const endProgress = ((i + 1) / steps.length) * 100;
+      
+      // Sub-steps for smoother animation
+      for (let p = startProgress; p <= endProgress; p += 5) {
+        setProcessingProgress(p);
+        await new Promise(resolve => setTimeout(resolve, 100 + Math.random() * 100));
+      }
+    }
+    
+    setProcessingProgress(100);
+    setProcessingStep('Complete!');
+    await new Promise(resolve => setTimeout(resolve, 500));
+    setIsProcessing(false);
+    setIsReady(true);
+  };
 
   useEffect(() => {
     if (showSplash) {
@@ -740,6 +818,11 @@ function AppContent() {
     document.addEventListener('visibilitychange', handleVisibilityChange);
     return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
   }, [user, showSplash, authLoading]);
+
+  useEffect(() => {
+    setIsReady(false);
+    setNtnMissingFilterTab('all');
+  }, [activeTab]);
 
   // Fetch Settings
   useEffect(() => {
@@ -1118,7 +1201,14 @@ function AppContent() {
   const [settingsNewPassword, setSettingsNewPassword] = useState('');
   const [newPin, setNewPin] = useState('');
 
-  const processHSCodeFile = (data: any[]) => {
+  const processHSCodeFile = async (data: any[]) => {
+    await simulateProcessing([
+      'Identifying US shipments...',
+      'Validating HS Code lengths...',
+      'Extracting NTN numbers...',
+      'Finalizing verification results...'
+    ]);
+
     // Filter out rows where CE Commodity Description is blank AND Recip Cntry is US
     const filteredData = data.filter(row => {
       const desc = row['CE Commodity Description'] || row['Description'] || '';
@@ -1178,60 +1268,98 @@ function AppContent() {
     setHsCodeResults(sortedResults);
     // Show only the last 5 rows of the current upload in recent activity
     setRecentHSCodeActivity(sortedResults.slice(0, 5));
-    setSuccessMessage(`Processed ${results.length} US shipments successfully!`);
-    setTimeout(() => setSuccessMessage(''), 3000);
   };
 
-  const processNtnMissingFile = (data: any[]) => {
+  const processNtnMissingFile = async (data: any[]) => {
+    await simulateProcessing([
+      'Filtering company patterns...',
+      'Checking customs values...',
+      'Verifying NTN presence...',
+      'Finalizing missing records...'
+    ]);
+
     const cnicPattern = /\b\d{5}-\d{7}-\d\b|\b\d{13}\b/;
     const invalidSuffixes = [/-eform$/i, /-a$/i, /-e form$/i, /-E FORM$/i];
-
     const catamountPattern = /CATAMOUNT\s+\d+/i;
 
-    const filteredData = data.filter(row => {
+    const results = data.filter(row => {
       const desc = (row['CE Commodity Description'] || row['Description'] || '').toString().trim();
+      if (desc === '') return false; // Basic filter: Must have a description
+      
       const company = (row['Shipper Company'] || row['shipper'] || '').toString().trim();
       const name = (row['Shipper Name'] || row['name'] || '').toString().trim();
       const taxId = (row['Shpr Tax ID Number'] || row['tax_id'] || row['NTN'] || '').toString().trim();
-      const customsValueRaw = row['Customs Value'] || row['value'] || 0;
-      const customsValue = parseFloat(customsValueRaw.toString().replace(/[^0-9.]/g, '')) || 0;
-
-      // 1. Description must not be blank
-      if (desc === '') return false;
-
-      // 2. Customs Value must be < 500
-      if (customsValue >= 500) return false;
-
-      // 3. Company, Name or Tax ID must not contain NTN or CNIC
-      if (NTN_REGEX.test(company) || cnicPattern.test(company) || NTN_REGEX.test(name) || cnicPattern.test(name) || NTN_REGEX.test(taxId) || cnicPattern.test(taxId)) return false;
-
-      // 4. Company must not end with specific suffixes
+      
+      // Discard logic: No NTN patterns found
+      const hasNtnPattern = NTN_REGEX.test(company) || cnicPattern.test(company) || 
+                           NTN_REGEX.test(name) || cnicPattern.test(name) || 
+                           NTN_REGEX.test(taxId) || cnicPattern.test(taxId);
+      
       const hasInvalidSuffix = invalidSuffixes.some(regex => regex.test(company));
-      if (hasInvalidSuffix) return false;
+      const hasCatamount = catamountPattern.test(company);
 
-      // 5. Company must not contain CATAMOUNT followed by digits
-      if (catamountPattern.test(company)) return false;
+      if (hasNtnPattern || hasInvalidSuffix || hasCatamount) {
+        return false;
+      }
 
       return true;
-    });
+    }).map((row, index) => {
+      const company = (row['Shipper Company'] || row['shipper'] || '').toString().trim();
+      const name = (row['Shipper Name'] || row['name'] || '').toString().trim();
+      const customsValueRaw = row['Customs Value'] || row['value'] || 0;
+      const customsValue = parseFloat(customsValueRaw.toString().replace(/[^0-9.]/g, '')) || 0;
+      
+      // Check if found in our main NTN database (Company Name or Shipper Name match)
+      // We only check ntnRecords (which actually have NTNs), NOT ntnMissingRecords
+      // Normalize function to strip generic terms and prevent false positive matches
+      const normalize = (str: string) => {
+        let s = str.toLowerCase().replace(/[^a-z0-9\s]/g, ' ');
+        const generics = /\b(m\s*s|pvt|ltd|limited|inc|llc|co|company|corporation|industry|industries|the|and|of|trading|logistics|traders|enterprise|enterprises|brothers|international|services|associates|agency|group|global|pakistan)\b/g;
+        return s.replace(generics, '').replace(/\s+/g, '');
+      };
 
-    const results = filteredData.map((row, index) => ({
-      id: index.toString(),
-      tracking: row['Tracking Number'] || row['tracking'] || 'N/A',
-      shipper: row['Shipper Company'] || row['shipper'] || 'N/A',
-      name: row['Shipper Name'] || row['name'] || 'N/A',
-      service: row['Service Type'] || row['service'] || 'N/A',
-      value: row['Customs Value'] || row['value'] || '0',
-      color: 'orange'
-    }));
+      const normCompany = normalize(company);
+      const normName = normalize(name);
+
+      // Check if found in our main NTN database (Company Name or Shipper Name match)
+      const isInDatabase = ntnRecords.some(r => {
+        const normDb = normalize(r.name || '');
+        // Require at least meaningful characters to prevent empty matches
+        if (normDb.length <= 3) return false; 
+        
+        // Use EXACT match on the normalized core string to prevent ANY false positive overlaps
+        return normCompany === normDb || normName === normDb;
+      });
+
+      // If it reached here, it doesn't have an NTN pattern.
+      const isMissing = !isInDatabase;
+
+      return {
+        id: index.toString(),
+        tracking: row['Tracking Number'] || row['tracking'] || 'N/A',
+        shipper: company,
+        name: name,
+        service: row['Service Type'] || row['service'] || 'N/A',
+        value: row['Customs Value'] || row['value'] || '0',
+        customsValue,
+        isInDatabase,
+        isMissing,
+        color: isInDatabase ? 'emerald' : 'orange'
+      };
+    });
 
     setNtnMissingResults(results);
     setRecentNtnMissingActivity(results.slice(0, 5));
-    setSuccessMessage(`Processed ${results.length} NTN Missing records!`);
-    setTimeout(() => setSuccessMessage(''), 3000);
   };
 
-  const processNtnAutoUpdateFile = (data: any[]) => {
+  const processNtnAutoUpdateFile = async (data: any[]) => {
+    await simulateProcessing([
+      'Cross-referencing database...',
+      'Performing fuzzy name matches...',
+      'Extracting hidden identifiers...',
+      'updating tracking records...'
+    ]);
+
     const results = data.map((row, index) => {
       const tracking = (row['Tracking Number'] || row['tracking'] || '').toString().trim();
       const shipperCompany = (row['Shipper Company'] || row['shipper'] || '').toString().trim();
@@ -1317,11 +1445,16 @@ function AppContent() {
 
     setNtnAutoUpdateResults(sortedResults);
     setRecentNtnAutoUpdateActivity(sortedResults.slice(0, 5));
-    setSuccessMessage(`Processed ${results.length} records for NTN Auto Update!`);
-    setTimeout(() => setSuccessMessage(''), 3000);
   };
 
-  const processBucketShopFile = (data: any[]) => {
+  const processBucketShopFile = async (data: any[]) => {
+    await simulateProcessing([
+      'Applying Sialkot bypass rules...',
+      'Filtering low value shipments...',
+      'Validating shipper references...',
+      'Generating bucket shop list...'
+    ]);
+
     const cnicPattern = /\b\d{5}-\d{7}-\d\b|\b\d{13}\b/;
     const invalidSuffixes = [/\s*-\s*e\s*form/i, /\s*-\s*eform/i, /\s*-\s*a$/i, /\s*-\s*c$/i];
     const sialkotKeywords = ['SIALKOT', 'SIALKOT/PNS', 'PARISROADSILAKOT', 'SKT', 'SKTA'];
@@ -1351,16 +1484,16 @@ function AppContent() {
       const hasNtnOrCnic = (text: string) => {
         if (!text) return false;
         const lowerText = text.toLowerCase();
-        return lowerText.includes('ntn') ||
-          lowerText.includes('cnic') ||
-          /\d{7,}/.test(text.replace(/[-\s]/g, '')) ||
-          NTN_REGEX.test(text) ||
-          cnicPattern.test(text);
+        return lowerText.includes('ntn') || 
+               lowerText.includes('cnic') || 
+               /\d{7,}/.test(text.replace(/[-\s]/g, '')) || 
+               NTN_REGEX.test(text) || 
+               cnicPattern.test(text);
       };
 
       const isCompanyException = allowedPatterns.some(regex => regex.test(company));
       const companyIsForbidden = !isCompanyException && hasNtnOrCnic(company);
-
+      
       if (companyIsForbidden || hasNtnOrCnic(name) || hasNtnOrCnic(taxId)) return false;
 
       // 4. Company must not end with specific suffixes (or contain e-form)
@@ -1390,11 +1523,16 @@ function AppContent() {
 
     setBucketShopResults(results);
     setRecentBucketShopActivity(results.slice(0, 5));
-    setSuccessMessage(`Processed ${results.length} Bucket Shop records!`);
-    setTimeout(() => setSuccessMessage(''), 3000);
   };
 
-  const processDifferentLinesFile = (data: any[]) => {
+  const processDifferentLinesFile = async (data: any[]) => {
+    await simulateProcessing([
+      'Analyzing address layouts...',
+      'Parsing shipper companies...',
+      'Deep-scanning for NTN patterns...',
+      'Optimizing line assignments...'
+    ]);
+
     const filteredData = data.filter(row => {
       const desc = row['CE Commodity Description'] || row['Description'] || '';
       return desc.toString().trim() !== '';
@@ -1456,8 +1594,6 @@ function AppContent() {
 
     setDifferentLinesResults(sortedResults);
     setRecentDifferentLinesActivity(sortedResults.slice(0, 5));
-    setSuccessMessage(`Processed ${results.length} Different Lines records!`);
-    setTimeout(() => setSuccessMessage(''), 3000);
   };
 
   const exportDifferentLinesResults = () => {
@@ -1499,7 +1635,15 @@ function AppContent() {
   const exportNtnMissingResults = () => {
     if (ntnMissingResults.length === 0) return;
 
-    const exportData = ntnMissingResults.map(row => ({
+    const filteredData = ntnMissingResults.filter(row => {
+      if (ntnMissingFilterTab === 'found') return row.isInDatabase && row.customsValue <= 500;
+      if (ntnMissingFilterTab === 'highValue') return row.customsValue > 500;
+      return row.isMissing && row.customsValue <= 500;
+    });
+
+    if (filteredData.length === 0) return;
+
+    const exportData = filteredData.map(row => ({
       'Tracking Number': row.tracking.toString(),
       'Shipper Company': row.shipper,
       'Shipper Name': row.name,
@@ -1509,8 +1653,13 @@ function AppContent() {
 
     const ws = XLSX.utils.json_to_sheet(exportData);
     const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "NTN Missing Results");
-    XLSX.writeFile(wb, "NTN_Missing_Results.xlsx");
+
+    let fileSuffix = 'Current_Results';
+    if (ntnMissingFilterTab === 'found') fileSuffix = 'Found_In_Database';
+    if (ntnMissingFilterTab === 'highValue') fileSuffix = 'High_Value';
+
+    XLSX.utils.book_append_sheet(wb, ws, `NTN Missing ${fileSuffix}`.substring(0, 31)); // Excel sheet names max 31 chars
+    XLSX.writeFile(wb, `NTN_Missing_${fileSuffix}.xlsx`);
   };
 
   const exportNtnAutoUpdateResults = () => {
@@ -1635,6 +1784,8 @@ function AppContent() {
   const handleNtnMissingFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+
+    setNtnMissingFilterTab('all');
 
     const reader = new FileReader();
     const extension = file.name.split('.').pop()?.toLowerCase();
@@ -2222,6 +2373,7 @@ function AppContent() {
 
     return (
       <div className="min-h-screen w-full bg-[#f0f2f5] text-gray-800 font-sans flex relative">
+        {isProcessing && <ProcessingOverlay progress={processingProgress} step={processingStep} />}
         <Sidebar
           activeTab={activeTab}
           setActiveTab={setActiveTab}
@@ -3821,10 +3973,13 @@ function AppContent() {
                         <p className="text-gray-400 font-medium mt-1">Upload Excel/CSV files to verify harmonized system codes</p>
                       </div>
                       <div className="flex items-center space-x-3">
-                        {hsCodeResults.length > 0 && (
+                        {isReady && hsCodeResults.length > 0 && (
                           <div className="flex items-center space-x-3">
                             <button
-                              onClick={() => setHsCodeResults([])}
+                              onClick={() => {
+                                setHsCodeResults([]);
+                                setIsReady(false);
+                              }}
                               className="px-6 py-3 bg-red-50 text-red-600 rounded-2xl font-bold hover:bg-red-100 transition-all flex items-center space-x-2"
                             >
                               <Trash2 size={18} />
@@ -3839,13 +3994,15 @@ function AppContent() {
                             </button>
                           </div>
                         )}
-                        <button
-                          onClick={() => document.getElementById('hs-code-upload')?.click()}
-                          className="px-6 py-3 bg-blue-600 text-white rounded-2xl font-bold shadow-lg shadow-blue-600/20 hover:bg-blue-700 transition-all flex items-center space-x-2"
-                        >
-                          <Upload size={18} />
-                          <span>Upload Excel/CSV</span>
-                        </button>
+                        {!isProcessing && (
+                          <button
+                            onClick={() => document.getElementById('hs-code-upload')?.click()}
+                            className="px-6 py-3 bg-blue-600 text-white rounded-2xl font-bold shadow-lg shadow-blue-600/20 hover:bg-blue-700 transition-all flex items-center space-x-2"
+                          >
+                            <Upload size={18} />
+                            <span>Upload Excel/CSV</span>
+                          </button>
+                        )}
                         <input
                           id="hs-code-upload"
                           type="file"
@@ -3933,11 +4090,42 @@ function AppContent() {
                   {/* NTN Missing Stats */}
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                     {[
-                      { label: 'TOTAL MISSING DB', value: ntnMissingRecords.length.toLocaleString(), icon: AlertCircle, color: 'blue', bg: 'bg-blue-50/50', iconBg: 'bg-blue-500' },
-                      { label: 'CURRENT RESULTS', value: ntnMissingResults.length.toLocaleString(), icon: Search, color: 'orange', bg: 'bg-orange-50/50', iconBg: 'bg-orange-500' },
-                      { label: 'HIGH VALUE SHIPMENTS', value: ntnMissingResults.filter(r => parseFloat(r.customsValue) > 5000).length.toLocaleString(), icon: Zap, color: 'amber', bg: 'bg-amber-50/50', iconBg: 'bg-amber-500' },
+                      { 
+                        label: 'NTN Found in Database', 
+                        value: ntnMissingResults.filter(r => r.isInDatabase && r.customsValue <= 500).length.toLocaleString(), 
+                        icon: CheckCircle2, 
+                        color: 'blue', 
+                        bg: ntnMissingFilterTab === 'found' ? 'bg-blue-100/50 border-2 border-blue-500/20' : 'bg-blue-50/50', 
+                        iconBg: 'bg-blue-500',
+                        clickable: true,
+                        onClick: () => setNtnMissingFilterTab('found')
+                      },
+                      { 
+                        label: 'CURRENT RESULTS', 
+                        value: ntnMissingResults.filter(r => r.isMissing && r.customsValue <= 500).length.toLocaleString(), 
+                        icon: Search, 
+                        color: 'orange', 
+                        bg: ntnMissingFilterTab === 'all' ? 'bg-orange-100/50 border-2 border-orange-500/20' : 'bg-orange-50/50', 
+                        iconBg: 'bg-orange-500', 
+                        clickable: true,
+                        onClick: () => setNtnMissingFilterTab('all')
+                      },
+                      { 
+                        label: 'HIGH VALUE SHIPMENTS', 
+                        value: ntnMissingResults.filter(r => r.customsValue > 500).length.toLocaleString(), 
+                        icon: Zap, 
+                        color: 'amber', 
+                        bg: ntnMissingFilterTab === 'highValue' ? 'bg-amber-100/50 border-2 border-amber-500/20' : 'bg-amber-50/50', 
+                        iconBg: 'bg-amber-500', 
+                        clickable: true,
+                        onClick: () => setNtnMissingFilterTab('highValue')
+                      },
                     ].map((stat, i) => (
-                      <div key={i} className={`${stat.bg} border border-gray-100 p-6 rounded-[32px] flex flex-col items-center text-center transition-all hover:shadow-lg group`}>
+                      <div 
+                        key={i} 
+                        onClick={stat.onClick}
+                        className={`${stat.bg} border border-gray-100 p-6 rounded-[32px] flex flex-col items-center text-center transition-all hover:shadow-lg group ${stat.clickable ? 'cursor-pointer active:scale-95' : ''}`}
+                      >
                         <div className={`w-12 h-12 ${stat.iconBg} rounded-2xl flex items-center justify-center text-white shadow-lg shadow-current/20 mb-4 group-hover:scale-110 transition-transform`}>
                           <stat.icon size={24} />
                         </div>
@@ -3954,10 +4142,13 @@ function AppContent() {
                         <p className="text-gray-400 font-medium mt-1">Filter shipments by company name patterns and customs value</p>
                       </div>
                       <div className="flex items-center space-x-3">
-                        {ntnMissingResults.length > 0 && (
+                        {isReady && ntnMissingResults.length > 0 && (
                           <div className="flex items-center space-x-3">
                             <button
-                              onClick={() => setNtnMissingResults([])}
+                              onClick={() => {
+                                setNtnMissingResults([]);
+                                setIsReady(false);
+                              }}
                               className="px-6 py-3 bg-red-50 text-red-600 rounded-2xl font-bold hover:bg-red-100 transition-all flex items-center space-x-2"
                             >
                               <Trash2 size={18} />
@@ -3972,13 +4163,15 @@ function AppContent() {
                             </button>
                           </div>
                         )}
-                        <button
-                          onClick={() => document.getElementById('ntn-missing-upload')?.click()}
-                          className="px-6 py-3 bg-blue-600 text-white rounded-2xl font-bold shadow-lg shadow-blue-600/20 hover:bg-blue-700 transition-all flex items-center space-x-2"
-                        >
-                          <Upload size={18} />
-                          <span>Upload Excel/CSV</span>
-                        </button>
+                        {!isProcessing && (
+                          <button
+                            onClick={() => document.getElementById('ntn-missing-upload')?.click()}
+                            className="px-6 py-3 bg-blue-600 text-white rounded-2xl font-bold shadow-lg shadow-blue-600/20 hover:bg-blue-700 transition-all flex items-center space-x-2"
+                          >
+                            <Upload size={18} />
+                            <span>Upload Excel/CSV</span>
+                          </button>
+                        )}
                         <input
                           id="ntn-missing-upload"
                           type="file"
@@ -3992,7 +4185,11 @@ function AppContent() {
                     {ntnMissingResults.length > 0 && (
                       <div className="mt-10">
                         <div className="flex items-center justify-between mb-6">
-                          <h3 className="text-sm font-black text-gray-400 uppercase tracking-widest">Verification Results ({ntnMissingResults.length})</h3>
+                          <h3 className="text-sm font-black text-gray-400 uppercase tracking-widest">
+                            {ntnMissingFilterTab === 'found' ? 'Found in Database' : 
+                             ntnMissingFilterTab === 'highValue' ? 'High Value Results (> $500)' : 
+                             `Verification Results (${ntnMissingResults.filter(r => r.isMissing && r.customsValue <= 500).length})`}
+                          </h3>
                           <div className="flex items-center space-x-4">
                             <div className="flex items-center space-x-2">
                               <div className="w-3 h-3 rounded-full bg-orange-500" />
@@ -4013,7 +4210,13 @@ function AppContent() {
                               </tr>
                             </thead>
                             <tbody className="divide-y divide-gray-50">
-                              {ntnMissingResults.map((row, i) => (
+                              {ntnMissingResults
+                                .filter(row => {
+                                  if (ntnMissingFilterTab === 'found') return row.isInDatabase && row.customsValue <= 500;
+                                  if (ntnMissingFilterTab === 'highValue') return row.customsValue > 500;
+                                  return row.isMissing && row.customsValue <= 500;
+                                })
+                                .map((row, i) => (
                                 <tr key={i} className="hover:bg-gray-50/30 transition-all">
                                   <td className="py-4 pl-6">
                                     <span className="text-xs font-mono font-bold text-orange-600 bg-orange-50 px-2 py-1 rounded-lg">{row.tracking}</span>
@@ -4078,10 +4281,13 @@ function AppContent() {
                         <p className="text-gray-400 font-medium mt-1">Automatically match and update company NTN/CNIC numbers</p>
                       </div>
                       <div className="flex items-center space-x-3">
-                        {ntnAutoUpdateResults.length > 0 && (
+                        {isReady && ntnAutoUpdateResults.length > 0 && (
                           <div className="flex items-center space-x-3">
                             <button
-                              onClick={() => setNtnAutoUpdateResults([])}
+                              onClick={() => {
+                                setNtnAutoUpdateResults([]);
+                                setIsReady(false);
+                              }}
                               className="px-6 py-3 bg-red-50 text-red-600 rounded-2xl font-bold hover:bg-red-100 transition-all flex items-center space-x-2"
                             >
                               <Trash2 size={18} />
@@ -4096,13 +4302,15 @@ function AppContent() {
                             </button>
                           </div>
                         )}
-                        <button
-                          onClick={() => document.getElementById('ntn-auto-upload')?.click()}
-                          className="px-6 py-3 bg-blue-600 text-white rounded-2xl font-bold shadow-lg shadow-blue-600/20 hover:bg-blue-700 transition-all flex items-center space-x-2"
-                        >
-                          <Upload size={18} />
-                          <span>Upload Excel/CSV</span>
-                        </button>
+                        {!isProcessing && (
+                          <button
+                            onClick={() => document.getElementById('ntn-auto-upload')?.click()}
+                            className="px-6 py-3 bg-blue-600 text-white rounded-2xl font-bold shadow-lg shadow-blue-600/20 hover:bg-blue-700 transition-all flex items-center space-x-2"
+                          >
+                            <Upload size={18} />
+                            <span>Upload Excel/CSV</span>
+                          </button>
+                        )}
                         <input
                           id="ntn-auto-upload"
                           type="file"
@@ -4210,10 +4418,13 @@ function AppContent() {
                         <p className="text-gray-400 font-medium mt-1">Filter and process shipments for Sialkot region</p>
                       </div>
                       <div className="flex items-center space-x-3">
-                        {bucketShopResults.length > 0 && (
+                        {isReady && bucketShopResults.length > 0 && (
                           <div className="flex items-center space-x-3">
                             <button
-                              onClick={() => setBucketShopResults([])}
+                              onClick={() => {
+                                setBucketShopResults([]);
+                                setIsReady(false);
+                              }}
                               className="px-6 py-3 bg-red-50 text-red-600 rounded-2xl font-bold hover:bg-red-100 transition-all flex items-center space-x-2"
                             >
                               <Trash2 size={18} />
@@ -4228,13 +4439,15 @@ function AppContent() {
                             </button>
                           </div>
                         )}
-                        <button
-                          onClick={() => document.getElementById('bucket-shop-upload')?.click()}
-                          className="px-6 py-3 bg-teal-600 text-white rounded-2xl font-bold shadow-lg shadow-teal-600/20 hover:bg-teal-700 transition-all flex items-center space-x-2"
-                        >
-                          <Upload size={18} />
-                          <span>Upload Excel/CSV</span>
-                        </button>
+                        {!isProcessing && (
+                          <button
+                            onClick={() => document.getElementById('bucket-shop-upload')?.click()}
+                            className="px-6 py-3 bg-teal-600 text-white rounded-2xl font-bold shadow-lg shadow-teal-600/20 hover:bg-teal-700 transition-all flex items-center space-x-2"
+                          >
+                            <Upload size={18} />
+                            <span>Upload Excel/CSV</span>
+                          </button>
+                        )}
                         <input
                           id="bucket-shop-upload"
                           type="file"
@@ -4316,10 +4529,13 @@ function AppContent() {
                         <p className="text-gray-400 font-medium mt-1">Extract NTN/CNIC from address lines and update company names</p>
                       </div>
                       <div className="flex items-center space-x-3">
-                        {differentLinesResults.length > 0 && (
+                        {isReady && differentLinesResults.length > 0 && (
                           <div className="flex items-center space-x-3">
                             <button
-                              onClick={() => setDifferentLinesResults([])}
+                              onClick={() => {
+                                setDifferentLinesResults([]);
+                                setIsReady(false);
+                              }}
                               className="px-6 py-3 bg-red-50 text-red-600 rounded-2xl font-bold hover:bg-red-100 transition-all flex items-center space-x-2"
                             >
                               <Trash2 size={18} />
@@ -4334,13 +4550,15 @@ function AppContent() {
                             </button>
                           </div>
                         )}
-                        <button
-                          onClick={() => document.getElementById('different-lines-upload')?.click()}
-                          className="px-6 py-3 bg-blue-600 text-white rounded-2xl font-bold shadow-lg shadow-blue-600/20 hover:bg-blue-700 transition-all flex items-center space-x-2"
-                        >
-                          <Upload size={18} />
-                          <span>Upload Excel/CSV</span>
-                        </button>
+                        {!isProcessing && (
+                          <button
+                            onClick={() => document.getElementById('different-lines-upload')?.click()}
+                            className="px-6 py-3 bg-blue-600 text-white rounded-2xl font-bold shadow-lg shadow-blue-600/20 hover:bg-blue-700 transition-all flex items-center space-x-2"
+                          >
+                            <Upload size={18} />
+                            <span>Upload Excel/CSV</span>
+                          </button>
+                        )}
                         <input
                           id="different-lines-upload"
                           type="file"
