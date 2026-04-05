@@ -37,22 +37,41 @@ const mockUser = {
 import emailjs from 'emailjs-com';
 
 // --- Custom Search Icon (Grid) ---
-const CustomSearchIcon = ({ size = 20, className = "" }: { size?: number, className?: string }) => (
-  <div className={`flex items-center justify-center rounded-xl bg-[#f0fdf4] p-1.5 border border-[#dcfce7] ${className}`}>
+const CustomSearchIcon = ({ size = 44, className = "" }: { size?: number, className?: string }) => (
+  <div
+    className={`flex items-center justify-center ${className}`}
+    style={{ width: size, height: size }}
+  >
     <svg
       width={size}
       height={size}
-      viewBox="0 0 24 24"
+      viewBox="0 0 100 100"
       fill="none"
-      stroke="#059669"
-      strokeWidth="2.5"
-      strokeLinecap="round"
-      strokeLinejoin="round"
+      xmlns="http://www.w3.org/2000/svg"
     >
-      <rect x="3" y="3" width="7" height="7" rx="1" />
-      <rect x="14" y="3" width="7" height="7" rx="1" />
-      <rect x="14" y="14" width="7" height="7" rx="1" />
-      <rect x="3" y="14" width="7" height="7" rx="1" />
+      <defs>
+        <linearGradient id="nRedGradient" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0%" stopColor="#ff3b30" />
+          <stop offset="100%" stopColor="#c40018" />
+        </linearGradient>
+        <linearGradient id="nGrayGradient" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor="#9a9a9a" />
+          <stop offset="100%" stopColor="#555555" />
+        </linearGradient>
+      </defs>
+
+      <path
+        d="M26 72C33 72 37 68 39 61V31L67 72C71 78 77 80 84 79C78 79 74 76 70 70L44 31C39 23 31 21 22 22C29 22 33 26 33 33V61C33 67 31 71 26 72Z"
+        fill="url(#nRedGradient)"
+      />
+      <path
+        d="M20 38C20 28 27 22 37 22C29 22 22 27 22 35C22 42 26 47 33 50C25 47 20 44 20 38Z"
+        fill="url(#nRedGradient)"
+      />
+      <path
+        d="M70 24H82V72H70C75 72 77 68 77 63V33C77 28 75 24 70 24Z"
+        fill="url(#nGrayGradient)"
+      />
     </svg>
   </div>
 );
@@ -773,7 +792,20 @@ function AppContent() {
   const [processingProgress, setProcessingProgress] = useState(0);
   const [processingStep, setProcessingStep] = useState('');
   const [isReady, setIsReady] = useState(false);
+  const [hsCodeFilterTab, setHsCodeFilterTab] = useState<'all' | 'valid' | 'invalid'>('all');
   const [ntnMissingFilterTab, setNtnMissingFilterTab] = useState<'all' | 'highValue' | 'found'>('all');
+  const [ntnMissingHasBeenUpdated, setNtnMissingHasBeenUpdated] = useState(false);
+
+  // Global Tool Processing Toast
+  const [toastMessage, setToastMessage] = useState('');
+  const [showToast, setShowToast] = useState(false);
+
+  const showSuccessToast = (message: string) => {
+    setToastMessage(message);
+    setShowToast(true);
+    setTimeout(() => setShowToast(false), 2000);
+  };
+
 
   const simulateProcessing = async (steps: string[]) => {
     setIsProcessing(true);
@@ -821,6 +853,7 @@ function AppContent() {
 
   useEffect(() => {
     setIsReady(false);
+    setHsCodeFilterTab('all');
     setNtnMissingFilterTab('all');
   }, [activeTab]);
 
@@ -1070,8 +1103,7 @@ function AppContent() {
   const handleSaveProfile = () => {
     setProfile({ ...editProfileData });
     setIsEditingProfile(false);
-    setSuccessMessage('Profile updated successfully!');
-    setTimeout(() => setSuccessMessage(''), 3000);
+    showSuccessToast('Profile updated successfully!');
   };
   const [isNtnRecordsModalOpen, setIsNtnRecordsModalOpen] = useState(false);
   const [selectedNtnRecords, setSelectedNtnRecords] = useState<string[]>([]);
@@ -1268,6 +1300,7 @@ function AppContent() {
     setHsCodeResults(sortedResults);
     // Show only the last 5 rows of the current upload in recent activity
     setRecentHSCodeActivity(sortedResults.slice(0, 5));
+    showSuccessToast(`${sortedResults.length} shipments analyzed`);
   };
 
   const processNtnMissingFile = async (data: any[]) => {
@@ -1322,7 +1355,7 @@ function AppContent() {
       const normName = normalize(name);
 
       // Check if found in our main NTN database (Company Name or Shipper Name match)
-      const isInDatabase = ntnRecords.some(r => {
+      const dbMatch = ntnRecords.find(r => {
         const normDb = normalize(r.name || '');
         // Require at least meaningful characters to prevent empty matches
         if (normDb.length <= 3) return false; 
@@ -1330,6 +1363,9 @@ function AppContent() {
         // Use EXACT match on the normalized core string to prevent ANY false positive overlaps
         return normCompany === normDb || normName === normDb;
       });
+
+      const isInDatabase = !!dbMatch;
+      const foundNtn = dbMatch ? (dbMatch.ntn || dbMatch.cnic || '') : '';
 
       // If it reached here, it doesn't have an NTN pattern.
       const isMissing = !isInDatabase;
@@ -1344,12 +1380,39 @@ function AppContent() {
         customsValue,
         isInDatabase,
         isMissing,
+        foundNtn,
         color: isInDatabase ? 'emerald' : 'orange'
       };
     });
 
     setNtnMissingResults(results);
     setRecentNtnMissingActivity(results.slice(0, 5));
+    setNtnMissingHasBeenUpdated(false);
+    showSuccessToast(`${results.length} shipments analyzed`);
+  };
+
+  const handleUpdateNtnFound = async () => {
+    await simulateProcessing([
+      'Accessing Database...',
+      'Retrieving NTN numbers...',
+      'Updating company names...',
+      'Finalizing...'
+    ]);
+
+    const updatedResults = ntnMissingResults.map(row => {
+      if (row.isInDatabase && row.foundNtn) {
+        let cleanedNtn = row.foundNtn.replace(/^NTN\s*/i, '');
+        const rawFound = getRawNtn(cleanedNtn);
+        const finalRaw = getRawNtn(row.shipper);
+        if (rawFound && !finalRaw.includes(rawFound)) {
+          return { ...row, shipper: `${row.shipper} ${cleanedNtn}` };
+        }
+      }
+      return row;
+    });
+
+    setNtnMissingResults(updatedResults);
+    setNtnMissingHasBeenUpdated(true);
   };
 
   const processNtnAutoUpdateFile = async (data: any[]) => {
@@ -1445,6 +1508,7 @@ function AppContent() {
 
     setNtnAutoUpdateResults(sortedResults);
     setRecentNtnAutoUpdateActivity(sortedResults.slice(0, 5));
+    showSuccessToast(`${sortedResults.length} shipments analyzed`);
   };
 
   const processBucketShopFile = async (data: any[]) => {
@@ -1523,6 +1587,7 @@ function AppContent() {
 
     setBucketShopResults(results);
     setRecentBucketShopActivity(results.slice(0, 5));
+    showSuccessToast(`${results.length} shipments analyzed`);
   };
 
   const processDifferentLinesFile = async (data: any[]) => {
@@ -1594,6 +1659,7 @@ function AppContent() {
 
     setDifferentLinesResults(sortedResults);
     setRecentDifferentLinesActivity(sortedResults.slice(0, 5));
+    showSuccessToast(`${sortedResults.length} shipments analyzed`);
   };
 
   const exportDifferentLinesResults = () => {
@@ -1724,8 +1790,7 @@ function AppContent() {
           batch.set(docRef, record);
         });
         await batch.commit();
-        setSuccessMessage(`Uploaded ${newRecords.length} NTN records to database!`);
-        setTimeout(() => setSuccessMessage(''), 3000);
+        showSuccessToast(`Uploaded ${newRecords.length} NTN records to database!`);
       } catch (err) {
         console.error('Error uploading NTN records:', err);
         setError('Failed to upload records to database.');
@@ -1950,8 +2015,7 @@ function AppContent() {
     try {
       const docRef = doc(db, 'ntn_records', id);
       await updateDoc(docRef, { status: 'Expired', color: 'red' });
-      setSuccessMessage('NTN record expired successfully');
-      setTimeout(() => setSuccessMessage(''), 3000);
+      showSuccessToast('NTN record expired successfully');
     } catch (err) {
       console.error('Error expiring record:', err);
       setError('Failed to update record status.');
@@ -1971,8 +2035,7 @@ function AppContent() {
     const { collectionName, id } = recordToDelete;
     setIsDeleteModalOpen(false);
     setRecordToDelete(null);
-    setSuccessMessage('Record deleted successfully');
-    setTimeout(() => setSuccessMessage(''), 3000);
+    showSuccessToast('Record deleted successfully');
 
     try {
       const docRef = doc(db, collectionName, id);
@@ -1988,7 +2051,6 @@ function AppContent() {
 
     const count = selectedNtnRecords.length;
     setIsDeletingBulk(true);
-    setSuccessMessage(`Deleting ${count} records...`);
 
     try {
       console.log(`Attempting to delete ${count} records:`, selectedNtnRecords);
@@ -1999,9 +2061,8 @@ function AppContent() {
 
       await Promise.all(deletePromises);
       console.log('Bulk delete successful');
-      setSuccessMessage(`${count} records deleted successfully`);
+      showSuccessToast(`${count} records deleted successfully`);
       setSelectedNtnRecords([]);
-      setTimeout(() => setSuccessMessage(''), 3000);
     } catch (err) {
       console.error('Error deleting records:', err);
       setError('Failed to delete some records from database.');
@@ -2031,8 +2092,7 @@ function AppContent() {
       const docRef = doc(db, collectionName, id);
       await updateDoc(docRef, updateData);
       setIsEditModalOpen(false);
-      setSuccessMessage('Record updated successfully');
-      setTimeout(() => setSuccessMessage(''), 3000);
+      showSuccessToast('Record updated successfully');
     } catch (err) {
       console.error('Error saving edit:', err);
       setError('Failed to update record.');
@@ -2115,8 +2175,7 @@ function AppContent() {
         status: 'Active',
         color: 'emerald'
       });
-      setSuccessMessage(`New record added to ${addedTab} successfully`);
-      setTimeout(() => setSuccessMessage(''), 3000);
+      showSuccessToast(`New record added to ${addedTab} successfully`);
 
       await addDoc(collection(db, collectionName), newEntry);
     } catch (err) {
@@ -2197,7 +2256,7 @@ function AppContent() {
     try {
       if (isLogin) {
         await signInWithEmailAndPassword(auth, email, password);
-        setSuccessMessage('Login successful!');
+        showSuccessToast('Login successful!');
       } else {
         if (password.length < 6) {
           setError('Password must be at least 6 characters long.');
@@ -2205,10 +2264,9 @@ function AppContent() {
           return;
         }
         await createUserWithEmailAndPassword(auth, email, password);
-        setSuccessMessage('Account created successfully! Waiting for approval.');
+        showSuccessToast('Account created successfully! Waiting for approval.');
         setIsLogin(true);
       }
-      setTimeout(() => setSuccessMessage(''), 2000);
     } catch (err: any) {
       console.error('Auth error:', err);
       if (err.code === 'auth/email-already-in-use') {
@@ -2233,8 +2291,7 @@ function AppContent() {
     try {
       const provider = new GoogleAuthProvider();
       await signInWithPopup(auth, provider);
-      setSuccessMessage('Login successful!');
-      setTimeout(() => setSuccessMessage(''), 2000);
+      showSuccessToast('Login successful!');
     } catch (err: any) {
       console.error('Google Login error:', err);
       if (err.code === 'auth/unauthorized-domain') {
@@ -2311,8 +2368,7 @@ function AppContent() {
     try {
       await signOut(auth);
       setShowSplash(true);
-      setSuccessMessage('Logged out successfully');
-      setTimeout(() => setSuccessMessage(''), 2000);
+      showSuccessToast('Logged out successfully');
     } catch (err: any) {
       console.error('Logout error:', err);
       setError('Failed to log out.');
@@ -2374,6 +2430,7 @@ function AppContent() {
     return (
       <div className="min-h-screen w-full bg-[#f0f2f5] text-gray-800 font-sans flex relative">
         {isProcessing && <ProcessingOverlay progress={processingProgress} step={processingStep} />}
+
         <Sidebar
           activeTab={activeTab}
           setActiveTab={setActiveTab}
@@ -2400,6 +2457,7 @@ function AppContent() {
           {/* Content Area */}
           <div className="flex-1 p-8">
             <div className="max-w-[1600px] mx-auto w-full">
+
               {activeTab === 'User Management' && user?.email === ADMIN_EMAIL && (
                 <div className="space-y-6">
                   <div className="flex items-center justify-between mb-8">
@@ -2442,8 +2500,7 @@ function AppContent() {
                               onClick={async () => {
                                 try {
                                   await updateDoc(doc(db, 'users', u.id), { status: 'approved' });
-                                  setSuccessMessage(`Approved ${u.displayName}`);
-                                  setTimeout(() => setSuccessMessage(''), 2000);
+                                  showSuccessToast(`Approved ${u.displayName}`);
                                 } catch (err) {
                                   console.error('Error approving user:', err);
                                 }
@@ -2459,8 +2516,7 @@ function AppContent() {
                               onClick={async () => {
                                 try {
                                   await updateDoc(doc(db, 'users', u.id), { status: 'rejected' });
-                                  setSuccessMessage(`Rejected ${u.displayName}`);
-                                  setTimeout(() => setSuccessMessage(''), 2000);
+                                  showSuccessToast(`Rejected ${u.displayName}`);
                                 } catch (err) {
                                   console.error('Error rejecting user:', err);
                                 }
@@ -2496,13 +2552,8 @@ function AppContent() {
                   <div className="mb-10">
                     <div className="search-container-outer">
                       <div className="search-wrapper-3d">
-                        <div className="icon-box-orange-grid">
-                          <div className="grid-animated-icon">
-                            <div className="grid-dot"></div>
-                            <div className="grid-dot"></div>
-                            <div className="grid-dot"></div>
-                            <div className="grid-dot"></div>
-                          </div>
+                        <div className="flex items-center justify-center pl-4 pr-2">
+                          <CustomSearchIcon size={54} />
                         </div>
 
                         <input
@@ -3352,13 +3403,8 @@ function AppContent() {
                   <div className="mb-12 space-y-6">
                     <div className="search-container-outer">
                       <div className="search-wrapper-3d">
-                        <div className="icon-box-orange-grid">
-                          <div className="grid-animated-icon">
-                            <div className="grid-dot"></div>
-                            <div className="grid-dot"></div>
-                            <div className="grid-dot"></div>
-                            <div className="grid-dot"></div>
-                          </div>
+                        <div className="flex items-center justify-center pl-4 pr-2">
+                          <CustomSearchIcon size={54} />
                         </div>
 
                         <input
@@ -3574,8 +3620,7 @@ function AppContent() {
                               if (file) {
                                 const url = URL.createObjectURL(file);
                                 setProfile({ ...profile, photoURL: url });
-                                setSuccessMessage('Profile picture updated!');
-                                setTimeout(() => setSuccessMessage(''), 3000);
+                                  showSuccessToast('Profile picture updated!');
                               }
                             }}
                           />
@@ -3790,10 +3835,9 @@ function AppContent() {
                                         await updatePassword(auth.currentUser, settingsNewPassword);
                                       }
 
-                                      setSuccessMessage('Login credentials updated in Firebase!');
-                                      setNewUsername('');
-                                      setSettingsNewPassword('');
-                                      setTimeout(() => setSuccessMessage(''), 3000);
+                                        showSuccessToast('Login credentials updated in Firebase!');
+                                        setNewUsername('');
+                                        setSettingsNewPassword('');
                                     } catch (err: any) {
                                       console.error('Error updating credentials:', err);
                                       if (err.code === 'auth/requires-recent-login') {
@@ -3821,8 +3865,7 @@ function AppContent() {
                                       key={mins}
                                       onClick={() => {
                                         setAutoLogoutMinutes(mins);
-                                        setSuccessMessage(`Auto-logout set to ${mins} minutes`);
-                                        setTimeout(() => setSuccessMessage(''), 3000);
+                                        showSuccessToast(`Auto-logout set to ${mins} minutes`);
                                       }}
                                       className={`py-2 rounded-xl text-[10px] font-bold transition-all border ${autoLogoutMinutes === mins
                                         ? 'bg-blue-600 text-white border-blue-600 shadow-md'
@@ -3851,9 +3894,8 @@ function AppContent() {
                                     onClick={() => {
                                       if (newPin.length === 4) {
                                         setLockPin(newPin);
-                                        setSuccessMessage('Security PIN updated!');
+                                        showSuccessToast('Security PIN updated!');
                                         setNewPin('');
-                                        setTimeout(() => setSuccessMessage(''), 3000);
                                       } else {
                                         setError('PIN must be 4 digits');
                                         setTimeout(() => setError(''), 3000);
@@ -3909,8 +3951,7 @@ function AppContent() {
                                       await setDoc(doc(db, 'settings', 'emailjs_service_id'), { id: 'emailjs_service_id', value: emailjsServiceId, updatedAt: new Date().toISOString() });
                                       await setDoc(doc(db, 'settings', 'emailjs_template_id'), { id: 'emailjs_template_id', value: emailjsTemplateId, updatedAt: new Date().toISOString() });
                                       await setDoc(doc(db, 'settings', 'emailjs_public_key'), { id: 'emailjs_public_key', value: emailjsPublicKey, updatedAt: new Date().toISOString() });
-                                      setSuccessMessage('Email settings saved to database!');
-                                      setTimeout(() => setSuccessMessage(''), 3000);
+                                      showSuccessToast('Email settings saved to database!');
                                     } catch (err) {
                                       console.error('Error saving email settings:', err);
                                       setError('Failed to save email settings');
@@ -3950,13 +3991,13 @@ function AppContent() {
                 <div className="space-y-8">
                   {/* HS Code Stats */}
                   <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
-                    {[
-                      { label: 'TOTAL HS RECORDS', value: hsCodeRecords.length.toLocaleString(), icon: FileCode, color: 'blue', bg: 'bg-blue-50/50', iconBg: 'bg-blue-500' },
-                      { label: 'CURRENT RESULTS', value: hsCodeResults.length.toLocaleString(), icon: Search, color: 'purple', bg: 'bg-purple-50/50', iconBg: 'bg-purple-500' },
-                      { label: 'VALID CODES', value: hsCodeResults.filter(r => r.isValid).length.toLocaleString(), icon: CheckCircle2, color: 'emerald', bg: 'bg-emerald-50/50', iconBg: 'bg-emerald-500' },
-                      { label: 'INVALID CODES', value: hsCodeResults.filter(r => !r.isValid).length.toLocaleString(), icon: XCircle, color: 'red', bg: 'bg-red-50/50', iconBg: 'bg-red-500' },
-                    ].map((stat, i) => (
-                      <div key={i} className={`${stat.bg} border border-gray-100 p-6 rounded-[32px] flex flex-col items-center text-center transition-all hover:shadow-lg group`}>
+                      {[
+                        { label: 'TOTAL HS RECORDS', value: hsCodeRecords.length.toLocaleString(), icon: FileCode, bg: 'bg-blue-50/50', iconBg: 'bg-blue-500' },
+                        { label: 'CURRENT RESULTS', value: hsCodeResults.length.toLocaleString(), icon: Search, bg: hsCodeFilterTab === 'all' ? 'bg-purple-100/50 border-2 border-purple-500/20' : 'bg-purple-50/50', iconBg: 'bg-purple-500', clickable: true, onClick: () => setHsCodeFilterTab('all') },
+                        { label: 'VALID CODES', value: hsCodeResults.filter(r => r.isValid).length.toLocaleString(), icon: CheckCircle2, bg: hsCodeFilterTab === 'valid' ? 'bg-emerald-100/50 border-2 border-emerald-500/20' : 'bg-emerald-50/50', iconBg: 'bg-emerald-500', clickable: true, onClick: () => setHsCodeFilterTab('valid') },
+                        { label: 'INVALID CODES', value: hsCodeResults.filter(r => !r.isValid).length.toLocaleString(), icon: XCircle, bg: hsCodeFilterTab === 'invalid' ? 'bg-red-100/50 border-2 border-red-500/20' : 'bg-red-50/50', iconBg: 'bg-red-500', clickable: true, onClick: () => setHsCodeFilterTab('invalid') },
+                      ].map((stat, i) => (
+                      <div key={i} onClick={stat.onClick} className={`${stat.bg} border border-gray-100 p-6 rounded-[32px] flex flex-col items-center text-center transition-all hover:shadow-lg group ${stat.clickable ? 'cursor-pointer active:scale-95' : ''}`}>
                         <div className={`w-12 h-12 ${stat.iconBg} rounded-2xl flex items-center justify-center text-white shadow-lg shadow-current/20 mb-4 group-hover:scale-110 transition-transform`}>
                           <stat.icon size={24} />
                         </div>
@@ -4016,7 +4057,13 @@ function AppContent() {
                     {hsCodeResults.length > 0 && (
                       <div className="mt-10">
                         <div className="flex items-center justify-between mb-6">
-                          <h3 className="text-sm font-black text-gray-400 uppercase tracking-widest">Verification Results ({hsCodeResults.length})</h3>
+                          <h3 className="text-sm font-black text-gray-400 uppercase tracking-widest">
+                            {hsCodeFilterTab === 'valid'
+                              ? `Valid Results (${hsCodeResults.filter(r => r.isValid).length})`
+                              : hsCodeFilterTab === 'invalid'
+                                ? `Invalid Results (${hsCodeResults.filter(r => !r.isValid).length})`
+                                : `Verification Results (${hsCodeResults.length})`}
+                          </h3>
                           <div className="flex items-center space-x-4">
                             <div className="flex items-center space-x-2">
                               <div className="w-3 h-3 rounded-full bg-emerald-500" />
@@ -4041,7 +4088,13 @@ function AppContent() {
                               </tr>
                             </thead>
                             <tbody className="divide-y divide-gray-50">
-                              {hsCodeResults.map((row, i) => (
+                              {hsCodeResults
+                                .filter(row => {
+                                  if (hsCodeFilterTab === 'valid') return row.isValid;
+                                  if (hsCodeFilterTab === 'invalid') return !row.isValid;
+                                  return true;
+                                })
+                                .map((row, i) => (
                                 <tr key={i} className="hover:bg-gray-50/30 transition-all">
                                   <td className="py-4 pl-6">
                                     <span className="text-xs font-mono font-bold text-blue-600 bg-blue-50 px-2 py-1 rounded-lg">{row.tracking}</span>
@@ -4148,18 +4201,30 @@ function AppContent() {
                               onClick={() => {
                                 setNtnMissingResults([]);
                                 setIsReady(false);
+                                setNtnMissingHasBeenUpdated(false);
                               }}
                               className="px-6 py-3 bg-red-50 text-red-600 rounded-2xl font-bold hover:bg-red-100 transition-all flex items-center space-x-2"
                             >
                               <Trash2 size={18} />
                               <span>Clear</span>
                             </button>
+                            
+                            {ntnMissingFilterTab === 'found' && !ntnMissingHasBeenUpdated && (
+                              <button
+                                onClick={handleUpdateNtnFound}
+                                className="px-6 py-3 bg-blue-600 text-white rounded-2xl font-bold shadow-lg shadow-blue-600/20 hover:bg-blue-700 transition-all flex items-center space-x-2"
+                              >
+                                <RefreshCw size={18} />
+                                <span>Update NTN</span>
+                              </button>
+                            )}
+
                             <button
                               onClick={exportNtnMissingResults}
                               className="px-6 py-3 bg-emerald-600 text-white rounded-2xl font-bold shadow-lg shadow-emerald-600/20 hover:bg-emerald-700 transition-all flex items-center space-x-2"
                             >
                               <Download size={18} />
-                              <span>Export Results</span>
+                              <span>{ntnMissingHasBeenUpdated && ntnMissingFilterTab === 'found' ? 'NTN Update Results' : 'Export Results'}</span>
                             </button>
                           </div>
                         )}
@@ -4181,6 +4246,7 @@ function AppContent() {
                         />
                       </div>
                     </div>
+
 
                     {ntnMissingResults.length > 0 && (
                       <div className="mt-10">
@@ -4321,6 +4387,7 @@ function AppContent() {
                       </div>
                     </div>
 
+
                     {ntnAutoUpdateResults.length > 0 && (
                       <div className="mt-10">
                         <div className="flex items-center justify-between mb-6">
@@ -4458,6 +4525,7 @@ function AppContent() {
                       </div>
                     </div>
 
+
                     {bucketShopResults.length > 0 && (
                       <div className="mt-10">
                         <div className="flex items-center justify-between mb-6">
@@ -4568,6 +4636,7 @@ function AppContent() {
                         />
                       </div>
                     </div>
+
 
                     {differentLinesResults.length > 0 && (
                       <div className="mt-10">
@@ -4894,15 +4963,48 @@ function AppContent() {
 
         {/* Success Toast */}
         <AnimatePresence>
-          {successMessage && (
+          {showToast && (
             <motion.div
-              initial={{ opacity: 0, y: 50 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: 50 }}
-              className="fixed bottom-8 right-8 z-[110] bg-emerald-500 text-white px-6 py-4 rounded-2xl shadow-2xl flex items-center space-x-3"
+              initial={{ opacity: 0, y: 42, scale: 0.9, rotate: -2, filter: 'blur(8px)' }}
+              animate={{ opacity: 1, y: 0, scale: 1, rotate: 0, filter: 'blur(0px)' }}
+              exit={{ opacity: 0, y: -18, scale: 0.94, rotate: 1.5, filter: 'blur(6px)' }}
+              transition={{ type: 'spring', stiffness: 320, damping: 24, mass: 0.8 }}
+              className="fixed bottom-6 right-6 z-[110] px-2"
             >
-              <CheckCircle2 size={20} />
-              <span className="font-bold text-sm">{successMessage}</span>
+              <div className="group relative min-w-[310px] max-w-[430px] overflow-hidden rounded-[28px] border border-emerald-200/80 bg-white/90 shadow-[0_24px_60px_rgba(16,185,129,0.22)] backdrop-blur-2xl">
+                <motion.div
+                  initial={{ x: '-100%' }}
+                  animate={{ x: '100%' }}
+                  transition={{ duration: 1.15, ease: 'easeInOut', repeat: Infinity, repeatDelay: 0.2 }}
+                  className="absolute inset-y-0 w-20 bg-gradient-to-r from-transparent via-white/40 to-transparent"
+                />
+                <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_right,rgba(16,185,129,0.16),transparent_35%),radial-gradient(circle_at_bottom_left,rgba(45,212,191,0.12),transparent_30%)]" />
+                <div className="relative h-1.5 w-full overflow-hidden bg-emerald-100/70">
+                  <motion.div
+                    initial={{ width: '0%' }}
+                    animate={{ width: '100%' }}
+                    transition={{ duration: 2, ease: 'linear' }}
+                    className="h-full rounded-r-full bg-gradient-to-r from-emerald-400 via-green-500 to-teal-500"
+                  />
+                </div>
+                <div className="relative flex items-center gap-3 p-4">
+                  <motion.div
+                    initial={{ scale: 0.7, rotate: -10 }}
+                    animate={{ scale: [0.92, 1.06, 1], rotate: [0, 8, 0] }}
+                    transition={{ duration: 0.55, ease: 'easeOut' }}
+                    className="flex h-12 w-12 shrink-0 items-center justify-center rounded-[20px] bg-gradient-to-br from-emerald-500 via-green-500 to-teal-500 text-white shadow-[0_12px_28px_rgba(16,185,129,0.35)]"
+                  >
+                    <CheckCircle2 size={20} />
+                  </motion.div>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2">
+                      <span className="inline-flex h-2 w-2 rounded-full bg-emerald-500 shadow-[0_0_12px_rgba(16,185,129,0.9)]" />
+                      <p className="bg-gradient-to-r from-emerald-600 via-green-600 to-teal-500 bg-clip-text text-[11px] font-black uppercase tracking-[0.22em] text-transparent italic drop-shadow-[0_1px_1px_rgba(16,185,129,0.15)]">Success</p>
+                    </div>
+                    <p className="mt-1 text-[15px] font-semibold italic leading-5 tracking-[0.01em] text-slate-800">{toastMessage}</p>
+                  </div>
+                </div>
+              </div>
             </motion.div>
           )}
         </AnimatePresence>
@@ -5409,4 +5511,3 @@ export default function App() {
     </ErrorBoundary>
   );
 }
-
